@@ -213,7 +213,7 @@ class BrownianBridgeModel(nn.Module):
 
         if sample_mid_step:
             imgs, one_step_imgs = [y], []
-            for i in tqdm(range(len(self.steps)), desc=f'sampling loop time step', total=len(self.steps)):
+            for i in tqdm(range(len(self.steps) - 1), desc=f'sampling loop time step', total=len(self.steps) - 1):
                 img, x0_recon = self.p_sample(x_t=imgs[-1], y=y, context=context, i=i, clip_denoised=clip_denoised)
                 imgs.append(img)
                 one_step_imgs.append(x0_recon)
