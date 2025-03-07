@@ -69,12 +69,16 @@ class BrownianBridgeModel(nn.Module):
         if self.skip_sample:
             if self.sample_type == 'linear':
                 midsteps = torch.arange(self.num_timesteps - 1, 1,
-                                        step=-((self.num_timesteps - 1) / (self.sample_step - 2))).long()
+                                    step=-((self.num_timesteps - 1) / (self.sample_step - 2))).long()
                 self.steps = torch.cat((midsteps, torch.Tensor([1, 0]).long()), dim=0)
             elif self.sample_type == 'cosine':
                 steps = np.linspace(start=0, stop=self.num_timesteps, num=self.sample_step + 1)
                 steps = (np.cos(steps / self.num_timesteps * np.pi) + 1.) / 2. * self.num_timesteps
                 self.steps = torch.from_numpy(steps)
+            elif self.sample_type == 'sin':
+                steps = np.linspace(start=0, stop=self.num_timesteps, num=self.sample_step + 1)
+                steps = (np.sin(steps / self.num_timesteps * np.pi / 2)) * self.num_timesteps
+                self.steps = torch.from_numpy(steps).long()  # Convert to long tensor
         else:
             self.steps = torch.arange(self.num_timesteps-1, -1, -1)
 
