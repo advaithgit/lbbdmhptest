@@ -1,5 +1,4 @@
 import pdb
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -100,15 +99,6 @@ class BrownianBridgeModel(nn.Module):
         return self.p_losses(x, y, context, t)
 
     def p_losses(self, x0, y, context, t, noise=None):
-        """
-        model loss
-        :param x0: encoded x_ori, E(x_ori) = x0
-        :param y: encoded y_ori, E(y_ori) = y
-        :param y_ori: original source domain image
-        :param t: timestep
-        :param noise: Standard Gaussian Noise
-        :return: loss
-        """
         b, c, h, w = x0.shape
         noise = default(noise, lambda: torch.randn_like(x0))
 
@@ -173,35 +163,43 @@ class BrownianBridgeModel(nn.Module):
         return imgs
 
     @torch.no_grad()
-    def p_sample_loop(self, y, context=None, clip_denoised=True, sample_mid_step=False):
-        if self.condition_key == "nocond":
-            context = None
-        else:
-            context = y if context is None else context
-
-        if sample_mid_step:
-            imgs, one_step_imgs = [y], []
-        # Change the range to stop one step earlier
-            for i in tqdm(range(len(self.steps) - 1), desc=f'sampling loop time step', total=len(self.steps) - 1):
-                img, x0_recon = self.p_sample(x_t=imgs[-1], y=y, context=context, i=i, clip_denoised=clip_denoised)
-                imgs.append(img)
-                one_step_imgs.append(x0_recon)
-            return imgs, one_step_imgs
-        else:
-            img = y
-        # Change the range to stop one step earlier
-            for i in tqdm(range(len(self.steps) - 1), desc=f'sampling loop time step', total=len(self.steps) - 1):
-                img, _ = self.p_sample(x_t=img, y=y, context=context, i=i, clip_denoised=clip_denoised)
+    def p_sample(self, x_t, y, context, i, clip_denoised=True):
+        """
+        Sample from the model
+        """
+        t = torch.full((x_t.shape[0],), self.steps[i], device=x_t.device, dtype=torch.long)
         
-        # Handle the last step separately if needed
-            if len(self.steps) > 0:
-                t = torch.full((img.shape[0],), self.steps[-1], device=img.device, dtype=torch.long)
-                objective_recon = self.denoise_fn(img, timesteps=t, context=context)
-                img = self.predict_x0_from_objective(img, y, t, objective_recon=objective_recon)
-                if clip_denoised:
-                    img.clamp_(-1., 1.)
-                
-            return img
+        # Get model prediction
+        objective_recon = self.denoise_fn(x_t, timesteps=t, context=context)
+        
+        # Predict x0
+        x0_recon = self.predict_x0_from_objective(x_t, y, t, objective_recon=objective_recon)
+        if clip_denoised:
+            x0_recon.clamp_(-1., 1.)
+        
+        # Get the next timestep
+        t_next = torch.full((x_t.shape[0],), self.steps[i + 1], device=x_t.device, dtype=torch.long) if i < len(self.steps) - 1 else t
+        
+        # Extract required values
+        m_t = extract(self.m_t, t, x_t.shape)
+        m_t_next = extract(self.m_t, t_next, x_t.shape)
+        var_t = extract(self.variance_t, t, x_t.shape)
+        var_t_next = extract(self.variance_t, t_next, x_t.shape)
+        
+        # Calculate mean coefficient
+        mean_coef = (1. - m_t_next) / (1. - m_t)
+        
+        # Calculate mean
+        mean = mean_coef * x0_recon + (1. - mean_coef) * y
+        
+        # Calculate variance
+        var = var_t_next - (var_t * (mean_coef ** 2))
+        
+        # Sample
+        noise = torch.randn_like(x_t)
+        sample = mean + torch.sqrt(var) * noise * self.eta
+        
+        return sample, x0_recon
 
     @torch.no_grad()
     def p_sample_loop(self, y, context=None, clip_denoised=True, sample_mid_step=False):
