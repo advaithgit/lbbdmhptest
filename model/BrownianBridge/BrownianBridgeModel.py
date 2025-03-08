@@ -73,11 +73,12 @@ class BrownianBridgeModel(nn.Module):
             elif self.sample_type == 'cosine':
                 steps = np.linspace(start=0, stop=self.num_timesteps, num=self.sample_step + 1)
                 steps = (np.cos(steps / self.num_timesteps * np.pi) + 1.) / 2. * self.num_timesteps
-                self.steps = torch.from_numpy(steps)
+                self.steps = torch.from_numpy(steps).long()
             elif self.sample_type == 'sin':
                 steps = np.linspace(start=0, stop=self.num_timesteps, num=self.sample_step + 1)
                 steps = (np.sin(steps / self.num_timesteps * np.pi / 2)) * self.num_timesteps
-                self.steps = torch.from_numpy(steps).long()  # Convert to long tensor
+                self.steps = torch.from_numpy(steps).long()
+                self.steps = torch.clamp(self.steps, 0, self.num_timesteps - 1)
         else:
             self.steps = torch.arange(self.num_timesteps-1, -1, -1)
 
@@ -164,38 +165,30 @@ class BrownianBridgeModel(nn.Module):
 
     @torch.no_grad()
     def p_sample(self, x_t, y, context, i, clip_denoised=True):
-        """
-        Sample from the model
-        """
-        t = torch.full((x_t.shape[0],), self.steps[i], device=x_t.device, dtype=torch.long)
+        i = min(i, len(self.steps) - 1)
         
-        # Get model prediction
+        t = torch.full((x_t.shape[0],), self.steps[i], device=x_t.device, dtype=torch.long)
+        t = torch.clamp(t, 0, self.num_timesteps - 1)
+        
         objective_recon = self.denoise_fn(x_t, timesteps=t, context=context)
         
-        # Predict x0
         x0_recon = self.predict_x0_from_objective(x_t, y, t, objective_recon=objective_recon)
         if clip_denoised:
             x0_recon.clamp_(-1., 1.)
         
-        # Get the next timestep
-        t_next = torch.full((x_t.shape[0],), self.steps[i + 1], device=x_t.device, dtype=torch.long) if i < len(self.steps) - 1 else t
+        next_i = min(i + 1, len(self.steps) - 1)
+        t_next = torch.full((x_t.shape[0],), self.steps[next_i], device=x_t.device, dtype=torch.long)
+        t_next = torch.clamp(t_next, 0, self.num_timesteps - 1)
         
-        # Extract required values
         m_t = extract(self.m_t, t, x_t.shape)
         m_t_next = extract(self.m_t, t_next, x_t.shape)
         var_t = extract(self.variance_t, t, x_t.shape)
         var_t_next = extract(self.variance_t, t_next, x_t.shape)
         
-        # Calculate mean coefficient
         mean_coef = (1. - m_t_next) / (1. - m_t)
-        
-        # Calculate mean
         mean = mean_coef * x0_recon + (1. - mean_coef) * y
-        
-        # Calculate variance
         var = var_t_next - (var_t * (mean_coef ** 2))
         
-        # Sample
         noise = torch.randn_like(x_t)
         sample = mean + torch.sqrt(var) * noise * self.eta
         
@@ -210,14 +203,14 @@ class BrownianBridgeModel(nn.Module):
 
         if sample_mid_step:
             imgs, one_step_imgs = [y], []
-            for i in tqdm(range(len(self.steps) - 1), desc=f'sampling loop time step', total=len(self.steps) - 1):
+            for i in tqdm(range(len(self.steps) - 1), desc=f'sampling loop time step'):
                 img, x0_recon = self.p_sample(x_t=imgs[-1], y=y, context=context, i=i, clip_denoised=clip_denoised)
                 imgs.append(img)
                 one_step_imgs.append(x0_recon)
             return imgs, one_step_imgs
         else:
             img = y
-            for i in tqdm(range(len(self.steps)), desc=f'sampling loop time step', total=len(self.steps)):
+            for i in tqdm(range(len(self.steps) - 1), desc=f'sampling loop time step'):
                 img, _ = self.p_sample(x_t=img, y=y, context=context, i=i, clip_denoised=clip_denoised)
             return img
 
